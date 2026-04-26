@@ -70,6 +70,11 @@ python3 sbom_tool.py --rpm ./scan_target ./RPM_disk \
   --compare-root ./reference_rpms \
   --cve-branch c10f2
 
+# + CVE-скан по ветке p10
+python3 sbom_tool.py --rpm ./scan_target ./RPM_disk \
+  --compare-root ./reference_rpms \
+  --cve-branch p10
+
 # Указать выходные файлы явно
 python3 sbom_tool.py --rpm ./scan_target ./RPM_disk \
   --compare-root ./reference_rpms \
@@ -163,14 +168,159 @@ libbar_4.5.6_all.deb
 
 ---
 
+## `sbom_binary.py` — бинарный SBOM
+
+Распаковывает `.deb`/`.rpm` пакеты, ищет внутри Go/Rust/.NET/Java артефакты, собирает по ним SBOM через syft. Опционально сравнивает исходный SBOM с бинарным и выявляет «призрачные» зависимости — те, что есть в source-SBOM, но не попали в бинарник.
+
+### Синтаксис
+
+```
+python3 sbom_binary.py <pkg_dir> [source_sbom.json] [options]
+```
+
+| Аргумент | Описание |
+|---|---|
+| `pkg_dir` | Директория с `.deb`/`.rpm` пакетами. По умолчанию: текущая директория |
+| `source_sbom.json` | *(необязательно)* Source SBOM для сравнения с бинарным |
+
+### Опции
+
+| Флаг | По умолчанию | Описание |
+|---|---|---|
+| `-o`, `--output <file>` | `sbom-full.json` | Путь к выходному бинарному SBOM |
+| `--output-dir <dir>` | `.` | Директория для отчётов о призрачных зависимостях |
+| `--unpack-dir <dir>` | `./unpacked` | Временная директория для распаковки (очищается перед запуском) |
+| `--errors-output <file>` | `errors.txt` | Файл с предупреждениями по Java/.NET |
+| `--all-deps` | — | При сравнении учитывать все экосистемы, а не только Go/Rust/Maven/NuGet |
+
+### Примеры
+
+```bash
+# Просто собрать бинарный SBOM
+python3 sbom_binary.py ./packages
+
+# Указать выходной файл
+python3 sbom_binary.py ./packages -o binary-sbom.json
+
+# Сравнить с исходным SBOM → отчёт о призрачных зависимостях
+python3 sbom_binary.py ./packages source-sbom.json \
+  -o sbom-full.json \
+  --output-dir binary-reports
+
+# Сравнение по всем экосистемам
+python3 sbom_binary.py ./packages source-sbom.json --all-deps
+```
+
+### Что делает скрипт
+
+1. Распаковывает все `.deb` (через `dpkg-deb -x`) и `.rpm` (через `rpm2cpio | cpio`) из `pkg_dir`
+2. Находит ELF-бинарники и определяет их тип: Go (`go version -m`), Rust (по строкам в бинарнике)
+3. Находит `.NET` приложения по парам `*.deps.json` + `*.dll`
+4. Находит Java артефакты: `*.jar`, `*.war`, `*.ear`
+5. Для каждого найденного артефакта запускает `syft` и собирает CycloneDX SBOM
+6. Объединяет все SBOM в один, дедуплицируя компоненты по `purl`
+7. Если передан `source_sbom.json` — сравнивает с бинарным SBOM и формирует отчёты о «призрачных» зависимостях
+
+### Выходные файлы
+
+| Файл | Описание |
+|---|---|
+| `sbom-full.json` | Объединённый бинарный CycloneDX SBOM |
+| `errors.txt` | Предупреждения: `.deps.json` без `.dll`, `.class` без `.jar` и т.п. |
+| `ghost-dependencies.json` | Зависимости из source-SBOM, не попавшие в бинарник (JSON) |
+| `ghost-dependencies.txt` | То же самое, читаемый текстовый формат с цепочками зависимостей |
+| `sbom-source-filtered.json` | Source SBOM с удалёнными призрачными и нерелевантными компонентами |
+
+---
+
+## `sbom_repack_deps.py` — рекурсивная распаковка + Trivy
+
+Рекурсивно распаковывает вложенные архивы любой глубины (`.deb`, `.rpm`, `.zip`, `.jar`, `.war`, `.tar.*`, `.gz`, `.7z` и др.), затем запускает **Trivy** на распакованном дереве и генерирует CycloneDX SBOM.
+
+### Синтаксис
+
+```
+python3 sbom_repack_deps.py <input> [options]
+```
+
+| Аргумент | Описание |
+|---|---|
+| `input` | Файл или директория с пакетами/архивами |
+
+### Опции
+
+| Флаг | По умолчанию | Описание |
+|---|---|---|
+| `-o`, `--output <file>` | `sbom-repacked-trivy.cdx.json` | Путь к выходному CycloneDX SBOM |
+| `--unpack-dir <dir>` | `./repacked-deps` | Директория для рекурсивной распаковки (очищается перед запуском) |
+| `--max-depth <N>` | `8` | Максимальная глубина вложенности архивов |
+| `--stats-output <file>` | `repack-deps.stats.json` | JSON-файл со статистикой распаковки |
+| `--trivy-arg <arg>` | — | Дополнительный аргумент для Trivy (повторять для нескольких) |
+| `--keep-unpacked` | — | Принимается для совместимости; распакованная директория сохраняется всегда |
+
+### Примеры
+
+```bash
+# Базовый запуск
+python3 sbom_repack_deps.py ./packages
+
+# Указать выходной файл
+python3 sbom_repack_deps.py ./packages -o deps.cdx.json
+
+# Своя директория для распаковки
+python3 sbom_repack_deps.py ./packages --unpack-dir ./tmp-repacked
+
+# Ограничить глубину вложенности
+python3 sbom_repack_deps.py ./packages --max-depth 5
+
+# Передать дополнительные флаги в Trivy
+python3 sbom_repack_deps.py ./packages \
+  --trivy-arg=--skip-dirs \
+  --trivy-arg=vendor
+
+# Запустить Trivy отдельно на уже распакованной директории
+trivy fs --format cyclonedx \
+  --output sbom-repacked-trivy.cdx.json \
+  ./repacked-deps
+```
+
+### Поддерживаемые форматы архивов
+
+`.deb`, `.rpm`, `.zip`, `.jar`, `.war`, `.ear`, `.whl`, `.tar`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.tar.zst`, `.gz`, `.bz2`, `.xz`, `.lzma`, `.zst`, `.7z`
+
+### Что делает скрипт
+
+1. Обходит входную директорию (или файл) и ставит все архивы в очередь на распаковку
+2. Для каждого архива создаёт уникальную поддиректорию и извлекает содержимое безопасным методом (без path traversal, без symlink-атак)
+3. Найденные внутри вложенные архивы добавляет обратно в очередь (до достижения `--max-depth`)
+4. Не-архивные файлы верхнего уровня копирует в `raw-files/`
+5. После завершения распаковки запускает `trivy fs --format cyclonedx` на всём дереве
+6. Сохраняет статистику в JSON
+
+### Выходные файлы
+
+| Файл | Описание |
+|---|---|
+| `sbom-repacked-trivy.cdx.json` | CycloneDX SBOM от Trivy |
+| `repack-deps.stats.json` | Статистика: кол-во архивов, файлов, ошибок распаковки |
+
+---
+
 ## Зависимости
 
 | Инструмент / библиотека | Нужен для |
 |---|---|
-| `syft` | Режим `--rpm` (сканирование) |
-| `rpm` (CLI) | Режим `--rpm` (запрос buildhost) |
-| `requests` | CVE-скан (загрузка ALT OVAL) |
-| `openpyxl` | CVE-скан (генерация XLSX-отчёта) |
+| `syft` | `--rpm`, `sbom_binary.py` |
+| `rpm` (CLI) | `--rpm` (запрос buildhost) |
+| `trivy` | `sbom_repack_deps.py` |
+| `dpkg-deb` | `sbom_binary.py`, `sbom_repack_deps.py` (распаковка .deb) |
+| `rpm2cpio` + `cpio` | `sbom_binary.py`, `sbom_repack_deps.py` (распаковка .rpm) |
+| `go` (CLI) | `sbom_binary.py` (определение Go-бинарников; опционально) |
+| `strings`, `file` | `sbom_binary.py` (определение Rust-бинарников) |
+| `7z` или `7za` | `sbom_repack_deps.py` (только для `.7z` архивов; опционально) |
+| `zstd` или `unzstd` | `sbom_repack_deps.py` (только для `.zst` архивов; опционально) |
+| `requests` | `sbom_alt_cve_working.py` (загрузка ALT OVAL) |
+| `openpyxl` | `sbom_alt_cve_working.py` (генерация XLSX-отчёта) |
 
 Установка Python-зависимостей:
 
@@ -182,13 +332,20 @@ pip install requests openpyxl
 
 ## Структура выходных файлов
 
-| Файл | Режим | Описание |
+| Файл | Скрипт/режим | Описание |
 |---|---|---|
 | `updated_sbom.json` | `--rpm` | Обогащённый CycloneDX SBOM |
 | `report.txt` | `--rpm` | Расхождения версий между SBOM и диском |
 | `cve_report.xlsx` | `--rpm` | CVE-отчёт по пакетам |
 | `sbom.json` | `--deb` | CycloneDX SBOM из .deb-пакетов |
 | `sbom.errors.json` | `--deb` | Пакеты, которые не удалось обработать |
+| `sbom-full.json` | `sbom_binary.py` | Объединённый бинарный SBOM |
+| `ghost-dependencies.json` | `sbom_binary.py` | Призрачные зависимости (JSON) |
+| `ghost-dependencies.txt` | `sbom_binary.py` | Призрачные зависимости (текст) |
+| `sbom-source-filtered.json` | `sbom_binary.py` | Отфильтрованный source SBOM |
+| `errors.txt` | `sbom_binary.py` | Предупреждения Java/.NET |
+| `sbom-repacked-trivy.cdx.json` | `sbom_repack_deps.py` | CycloneDX SBOM от Trivy |
+| `repack-deps.stats.json` | `sbom_repack_deps.py` | Статистика распаковки |
 
 ---
 
