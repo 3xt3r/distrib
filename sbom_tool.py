@@ -1594,7 +1594,7 @@ def cmd_rpm(args: argparse.Namespace) -> int:
         return 2
 
     scan_target = Path(args.scan_target).resolve()
-    rpm_dir = Path(args.rpm_dir).resolve()
+    compare_root = Path(args.compare_root).resolve()
     report_file = Path(args.report).resolve()
     updated_sbom_file = Path(args.output).resolve()
 
@@ -1605,22 +1605,12 @@ def cmd_rpm(args: argparse.Namespace) -> int:
         print(f"error: scan_target must be a directory: {scan_target}", file=sys.stderr)
         return 1
 
-    if not rpm_dir.exists():
-        print(f"error: rpm_dir does not exist: {rpm_dir}", file=sys.stderr)
+    if not compare_root.exists():
+        print(f"error: compare_root does not exist: {compare_root}", file=sys.stderr)
         return 1
-    if not rpm_dir.is_dir():
-        print(f"error: rpm_dir must be a directory: {rpm_dir}", file=sys.stderr)
+    if not compare_root.is_dir():
+        print(f"error: compare_root must be a directory: {compare_root}", file=sys.stderr)
         return 1
-
-    compare_root: Optional[Path] = None
-    if args.compare_root:
-        compare_root = Path(args.compare_root).resolve()
-        if not compare_root.exists():
-            print(f"error: compare_root does not exist: {compare_root}", file=sys.stderr)
-            return 1
-        if not compare_root.is_dir():
-            print(f"error: compare_root must be a directory: {compare_root}", file=sys.stderr)
-            return 1
 
     env = os.environ.copy()
     env.setdefault("SYFT_FILE_METADATA_DIGESTS", "sha256")
@@ -1647,12 +1637,11 @@ def cmd_rpm(args: argparse.Namespace) -> int:
         "compare_rpm_query_errors": 0,
     }
 
-    if compare_root is not None:
-        try:
-            compare_stats = compare_with_other_root(cdx, compare_root, debug=args.debug)
-        except RuntimeError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 1
+    try:
+        compare_stats = compare_with_other_root(cdx, compare_root, debug=args.debug)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
     removed_cert_props = 0
     if args.remove_cert:
@@ -1667,7 +1656,7 @@ def cmd_rpm(args: argparse.Namespace) -> int:
 
     filtered_components = extract_filtered_sbom_components(cdx)
 
-    rpm_files = find_rpm_files(rpm_dir)
+    rpm_files = find_rpm_files(compare_root)
     disk_index = index_disk_rpms(rpm_files)
 
     version_mismatches, missing_on_disk = compare_components(filtered_components, disk_index)
@@ -1809,8 +1798,8 @@ def build_rpm_parser() -> argparse.ArgumentParser:
         description="Run syft on RPM folder, enrich components and write updated SBOM",
     )
     parser.add_argument("scan_target", help="Directory with RPM files to scan with syft")
-    parser.add_argument("rpm_dir", help="Directory with RPM files for final name/version comparison")
-    parser.add_argument("--compare-root", help="Directory with reference RPMs for SHA-256 comparison")
+    parser.add_argument("--compare-root", required=True,
+        help="Directory with reference RPMs for SHA-256 comparison and name/version matching")
     parser.add_argument("--remove-cert", action="store_true",
         help="Remove GOST:provided_by from all components before final filtering/report stage")
     parser.add_argument("--keep-intermediate", action="store_true",
@@ -1857,7 +1846,7 @@ def build_deb_parser() -> argparse.ArgumentParser:
 
 def print_usage() -> None:
     print(
-        "usage: sbom_tool.py --rpm <scan_target> <rpm_dir> [options]\n"
+        "usage: sbom_tool.py --rpm <scan_target> --compare-root <dir> [options]\n"
         "       sbom_tool.py --deb <folder> [package_list.txt] [options]\n"
         "\n"
         "modes:\n"
