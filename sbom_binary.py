@@ -478,6 +478,7 @@ def build_binary_sbom(pkg_dir: Path, output_file: Path, unpack_dir: Path, errors
             seen_targets.add(artifact)
 
     if errors:
+        errors_file.parent.mkdir(parents=True, exist_ok=True)
         errors_file.write_text("\n".join(errors) + "\n", encoding="utf-8")
         print(f"[!] Проблемы записаны в {errors_file} ({len(errors)} шт.)")
     else:
@@ -565,11 +566,11 @@ def diff_source_binary(source_path: Path, binary_path: Path, output_dir: Path, a
 
     ghost_report.sort(key=lambda x: (x.get("ecosystem") or "", x.get("name") or ""))
 
-    ghost_path = output_dir / "ghost-dependencies.json"
+    ghost_path = output_dir / "ghost_dependencies.json"
     ghost_path.write_text(json.dumps(ghost_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"[+] Призрачные зависимости: {ghost_path}")
 
-    ghost_txt_path = output_dir / "ghost-dependencies.txt"
+    ghost_txt_path = output_dir / "ghost_dependencies.txt"
     with ghost_txt_path.open("w", encoding="utf-8") as f:
         f.write(f"Зависимости из исходников не попавшие в бинарный SBOM: {len(ghost_report)}\n")
         f.write("=" * 80 + "\n\n")
@@ -615,7 +616,7 @@ def diff_source_binary(source_path: Path, binary_path: Path, output_dir: Path, a
         filtered_deps.append(filtered_dep)
     filtered_sbom["dependencies"] = filtered_deps
 
-    filtered_path = output_dir / "sbom-source-filtered.json"
+    filtered_path = output_dir / "binary_filtered.json"
     filtered_path.write_text(json.dumps(filtered_sbom, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"[+] Отфильтрованный source SBOM: {filtered_path}")
 
@@ -650,13 +651,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-o",
         "--output",
-        default="sbom-full.json",
-        help="Output binary SBOM JSON path. Default: sbom-full.json",
+        default="binary.json",
+        help="Output binary SBOM JSON path. Default: binary.json",
     )
     parser.add_argument(
         "--output-dir",
-        default=".",
-        help="Output directory for ghost-dependencies reports. Default: current directory",
+        default="./debug",
+        help="Output directory for ghost-dependencies and filtered SBOM reports. Default: ./debug",
     )
     parser.add_argument(
         "--unpack-dir",
@@ -665,8 +666,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--errors-output",
-        default="errors.txt",
-        help="Output text file for Java/.NET detection warnings. Default: errors.txt",
+        default="./debug/binary.errors.txt",
+        help="Output text file for Java/.NET detection warnings. Default: ./debug/binary.errors.txt",
     )
     parser.add_argument(
         "--all-deps",

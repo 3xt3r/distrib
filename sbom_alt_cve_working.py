@@ -762,12 +762,10 @@ def export_xlsx_safe(
     ws.append([])
 
     headers = [
-        "package", "version", "source_package", "source_rpm", "release",
-        "buildhost", "gost_provided_by", "ecosystem",
-        "detected_branch", "branch_confidence", "branch_evidence",
-        "scan_branch", "branch_conflict",
-        "clean_version_by_branch", "latest_by_branch",
-        "max_severity", "findings_count", "vuln_ids",
+        "package", "version", "source_rpm",
+        "buildhost", "gost_provider", "ecosystem",
+        "latest_by_branch",
+        "max_severity", "findings_cve", "vuln_ids",
     ]
     ws.append(headers)
 
@@ -781,12 +779,9 @@ def export_xlsx_safe(
         conflict = "yes" if (TARGET_BRANCH and comp.get("branch_conf") == "exact" and comp.get("branch") and comp.get("branch") != TARGET_BRANCH) else ""
         ws.append([
             xlsx_safe(comp.get("name", "")), xlsx_safe(comp.get("version", "")),
-            xlsx_safe(comp.get("src_name") or comp.get("name", "")), xlsx_safe(comp.get("src_rpm", "")),
-            xlsx_safe(comp.get("release", "")), xlsx_safe(comp.get("buildhost", "")),
+            xlsx_safe(comp.get("src_rpm", "")),
+            xlsx_safe(comp.get("buildhost", "")),
             xlsx_safe("yes" if comp.get("gost_provided") else ""), xlsx_safe(comp.get("ecosystem", "")),
-            xlsx_safe(comp.get("branch", "")), xlsx_safe(comp.get("branch_conf", "")), xlsx_safe(comp.get("branch_src", "")),
-            xlsx_safe(branch_label(comp)), xlsx_safe(conflict),
-            xlsx_safe(join_branch_map(data.get("clean_ver_by_branch", {}))),
             xlsx_safe(join_branch_map(latest_versions.get(comp.get("name", ""), {}))),
             xlsx_safe((max_sev or "").upper()), len(findings), xlsx_safe(vuln_ids),
         ])

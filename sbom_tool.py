@@ -866,6 +866,7 @@ def cmd_deb(args: argparse.Namespace) -> int:
 
     if errors:
         err_path = Path(args.errors_output).resolve()
+        err_path.parent.mkdir(parents=True, exist_ok=True)
         err_path.write_text(json.dumps(errors, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(f"Errors written: {err_path}")
         print(f"Packages with errors: {len(errors)}")
@@ -885,8 +886,8 @@ DEFAULT_PROPERTIES = [
     {"name": "GOST:security_function", "value": "no"},
 ]
 
-REPORT_FILE_DEFAULT = "report.txt"
-UPDATED_SBOM_FILE_DEFAULT = "updated_sbom.json"
+REPORT_FILE_DEFAULT = "debug/report.txt"
+UPDATED_SBOM_FILE_DEFAULT = "alt.json"
 
 
 def run_cmd(cmd: List[str], env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
@@ -1451,6 +1452,7 @@ def write_report(
     missing_on_disk: List[Dict[str, Any]],
     output_file: Path,
 ) -> None:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     with output_file.open("w", encoding="utf-8") as f:
         if not version_mismatches and not missing_on_disk:
             f.write("Проблем не найдено.\n")
@@ -1814,8 +1816,8 @@ def build_rpm_parser() -> argparse.ArgumentParser:
     parser.set_defaults(auto_cve_rpm=True, cve_rpm_args=None)
     parser.add_argument("--cve-branch", choices=["p9", "p10", "p11", "c9f2", "c10f2"], default="",
         help="ALT Linux branch for automatic CVE scan")
-    parser.add_argument("--cve-output", default="cve_report.xlsx",
-        help="CVE XLSX output path. Default: cve_report.xlsx")
+    parser.add_argument("--cve-output", default="cve_report_alt.xlsx",
+        help="CVE XLSX output path. Default: cve_report_alt.xlsx")
     parser.add_argument("--cve-json", action="store_true",
         help="Print CVE results as JSON instead of writing XLSX")
     parser.add_argument("--cve-verbose", action="store_true", help="Write verbose CVE log")
@@ -1837,10 +1839,10 @@ def build_deb_parser() -> argparse.ArgumentParser:
              "Packages NOT found in this list will get GOST:provided_by=Astra Linux")
     parser.add_argument("--with-dependencies", action="store_true",
         help="Include internal dependencies between found .deb packages in SBOM")
-    parser.add_argument("-o", "--output", default="sbom.json",
-        help="Output SBOM JSON path. Default: sbom.json")
-    parser.add_argument("--errors-output", default="sbom.errors.json",
-        help="Output errors JSON path. Default: sbom.errors.json")
+    parser.add_argument("-o", "--output", default="deb.json",
+        help="Output SBOM JSON path. Default: deb.json")
+    parser.add_argument("--errors-output", default="debug/deb.errors.json",
+        help="Output errors JSON path. Default: debug/deb.errors.json")
     return parser
 
 

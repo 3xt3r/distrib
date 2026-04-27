@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 
-DEFAULT_OUTPUT = "sbom-repacked-trivy.cdx.json"
+DEFAULT_OUTPUT = "repack.cdx.json"
 DEFAULT_UNPACK_DIR = "./repacked-deps"
 
 ARCHIVE_SUFFIXES = {
@@ -472,8 +472,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--stats-output",
-        default="repack-deps.stats.json",
-        help="JSON file with unpacking statistics. Default: repack-deps.stats.json",
+        default="./debug/repack.stats.json",
+        help="JSON file with unpacking statistics. Default: ./debug/repack.stats.json",
     )
     parser.add_argument(
         "--keep-unpacked",
