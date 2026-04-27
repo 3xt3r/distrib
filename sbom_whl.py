@@ -137,7 +137,7 @@ def extract_wheel_info(whl_path: Path) -> Optional[WheelInfo]:
             name=_normalise_name(meta["name"]),
             version=meta["version"],
             summary=meta.get("summary", ""),
-            home_page=meta.get("home-page", "") or meta.get("project-url", ""),
+            home_page=_extract_home_page(meta),
             author=meta.get("author", "") or meta.get("author-email", ""),
             license_=meta.get("license", ""),
             requires_python=meta.get("requires-python", ""),
@@ -164,8 +164,38 @@ def extract_wheel_info(whl_path: Path) -> Optional[WheelInfo]:
 # CycloneDX builder
 # ---------------------------------------------------------------------------
 
-def _make_purl(name: str, version: str) -> str:
-    return f"pkg:pypi/{name}@{version}"
+def _is_valid_iri(url: str) -> bool:
+    """
+    Check that a URL is a valid IRI-reference acceptable by CycloneDX 1.6.
+    Must start with a recognized scheme and contain no bare spaces.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    url = url.strip()
+    if " " in url:
+        return False
+    # Must start with http/https/ftp or urn: schemes
+    return bool(re.match(r"^(https?|ftp)://\S+$", url, re.IGNORECASE))
+
+
+def _extract_home_page(meta: Dict[str, str]) -> str:
+    """
+    Extract a clean homepage URL from METADATA.
+    'Home-page' is a plain URL; 'Project-URL' is 'Label, URL' — parse it.
+    """
+    home = meta.get("home-page", "").strip()
+    if _is_valid_iri(home):
+        return home
+
+    # Project-URL: Homepage, https://...
+    project_url = meta.get("project-url", "").strip()
+    if project_url and "," in project_url:
+        _, _, url_part = project_url.partition(",")
+        url_part = url_part.strip()
+        if _is_valid_iri(url_part):
+            return url_part
+
+    return ""
 
 
 def _make_component(info: WheelInfo) -> Dict[str, Any]:
@@ -195,17 +225,19 @@ def _make_component(info: WheelInfo) -> Dict[str, Any]:
         comp["licenses"] = [{"license": {"name": info.license_}}]
 
     external_refs = []
-    if info.home_page:
+    if info.home_page and _is_valid_iri(info.home_page):
         external_refs.append({
             "type": "website",
             "url": info.home_page,
         })
-    # PyPI page always derivable from purl
-    external_refs.append({
-        "type": "distribution",
-        "url": f"https://pypi.org/project/{info.name}/{info.version}/",
-    })
-    comp["externalReferences"] = external_refs
+    pypi_url = f"https://pypi.org/project/{info.name}/{info.version}/"
+    if _is_valid_iri(pypi_url):
+        external_refs.append({
+            "type": "distribution",
+            "url": pypi_url,
+        })
+    if external_refs:
+        comp["externalReferences"] = external_refs
 
     return comp
 
