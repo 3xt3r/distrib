@@ -20,6 +20,7 @@
 ```
 python3 sbom_tool.py --rpm <scan_target> --compare-root <dir> [options]
 python3 sbom_tool.py --deb <folder> [package_list.txt] [options]
+python3 sbom_tool.py --binary-repack <pkg_dir> [source_sbom.json] [options]
 ```
 
 Справка по режиму:
@@ -33,11 +34,7 @@ python3 sbom_tool.py --deb --help
 
 ## Режим `--rpm`
 
-<<<<<<< HEAD
 Запускает **syft** на директории с RPM-файлами, обогащает компоненты метаданными (SHA-256, buildhost), сравнивает с эталонными пакетами по SHA-256 и имени/версии, запускает CVE-сканер.
-=======
-Режим работает для ALT Linux: запускает инструмент **syft** на директории с RPM-файлами, обогащает компоненты метаданными (SHA-256, buildhost), сравнивает с эталонными пакетами по SHA-256 и имени/версии, запускает CVE-сканер.
->>>>>>> f97913e (init)
 
 ### Синтаксис
 
@@ -54,13 +51,8 @@ python3 sbom_tool.py --rpm <scan_target> --compare-root <dir> [options]
 
 | Флаг | По умолчанию | Описание |
 |---|---|---|
-<<<<<<< HEAD
-| `-o`, `--output <file>` | `updated_sbom.json` | Путь к выходному SBOM JSON |
-| `--report <file>` | `report.txt` | Путь к текстовому отчёту о расхождениях версий |
-=======
 | `-o`, `--output <file>` | `alt.json` | Путь к выходному SBOM JSON |
 | `--report <file>` | `debug/report.txt` | Путь к отчёту о расхождениях версий |
->>>>>>> f97913e (init)
 | `--no-cve-rpm` | — | Отключить автоматический CVE-скан после генерации SBOM |
 | `--cve-branch` | (все) | Ветка Alt Linux для CVE-скана: `p9`, `p10`, `p11`, `c9f2`, `c10f2` |
 | `--cve-output <file>` | `cve_report_alt.xlsx` | Путь к CVE-отчёту в формате XLSX |
@@ -85,37 +77,16 @@ python3 sbom_tool.py --rpm ./scan_target \
   --compare-root ./RPM_disk \
   --cve-branch c10f2
 
-<<<<<<< HEAD
-# + CVE-скан по ветке p10
-python3 sbom_tool.py --rpm ./scan_target \
-  --compare-root ./RPM_disk \
-  --cve-branch p10
-
-# Указать выходные файлы явно
-python3 sbom_tool.py --rpm ./scan_target \
-  --compare-root ./RPM_disk \
-  -o updated_sbom.json \
-  --cve-output cve_report.xlsx
-=======
 # Указать выходные файлы явно
 python3 sbom_tool.py --rpm ./scan_target \
   --compare-root ./RPM_disk \
   -o alt.json \
   --cve-output cve_report_alt.xlsx
->>>>>>> f97913e (init)
 
 # Без CVE-скана
 python3 sbom_tool.py --rpm ./scan_target \
   --compare-root ./RPM_disk \
   --no-cve-rpm
-<<<<<<< HEAD
-
-# CVE-скан с произвольными аргументами
-python3 sbom_tool.py --rpm ./scan_target \
-  --compare-root ./RPM_disk \
-  --cve-rpm --c10f2 -o cve_report.xlsx
-=======
->>>>>>> f97913e (init)
 ```
 
 ### Выходные файлы
@@ -146,11 +117,7 @@ python3 sbom_tool.py --rpm ./scan_target \
 1. Запускает `syft` на `scan_target` → получает базовый CycloneDX SBOM
 2. Для каждого RPM-файла в `scan_target` вычисляет SHA-256 и запрашивает `buildhost` через `rpm -qp`
 3. Сравнивает пакеты по SHA-256 с эталонными RPM из `--compare-root`; совпавшие помечаются `GOST:provided_by=Alt Linux`
-<<<<<<< HEAD
-4. Финально сверяет имена/версии компонентов с теми же RPM из `--compare-root`; расхождения попадают в `report.txt`
-=======
 4. Финально сверяет имена/версии компонентов с теми же RPM из `--compare-root`; расхождения попадают в `debug/report.txt`
->>>>>>> f97913e (init)
 5. Добавляет стандартные GOST-поля (`GOST:attack_surface=no`, `GOST:security_function=no`) всем компонентам
 6. Сортирует компоненты по экосистеме (rpm → deb → npm → pypi → ...)
 7. Запускает CVE-сканер (если не передан `--no-cve-rpm`)
@@ -159,7 +126,7 @@ python3 sbom_tool.py --rpm ./scan_target \
 
 ## Режим `--deb`
 
-Режим работает для Astra Linux: cканирует директорию с `.deb`-файлами и генерирует CycloneDX SBOM. Читает метаданные напрямую из архивов — установка пакетов не требуется.
+Сканирует директорию с `.deb`-файлами и генерирует CycloneDX SBOM. Читает метаданные напрямую из архивов — установка пакетов не требуется.
 
 ### Синтаксис
 
@@ -223,6 +190,73 @@ libbar_4.5.6_all.deb
 5. Если передан `package_list.txt` — применяет правила маркировки `GOST:provided_by`
 6. Если передан `--with-dependencies` — строит граф зависимостей по полям `Depends` и `Pre-Depends`
 7. Сортирует компоненты по экосистеме и записывает CycloneDX SBOM
+
+---
+
+## Режим `--binary-repack`
+
+Запускает `sbom_binary.py` и `sbom_repack_deps.py` на одной и той же директории с пакетами, используя **общую директорию распаковки** — архивы распаковываются один раз. На выходе два SBOM файла.
+
+### Синтаксис
+
+```
+python3 sbom_tool.py --binary-repack <pkg_dir> [source_sbom.json] [options]
+```
+
+| Аргумент | Описание |
+|---|---|
+| `pkg_dir` | Директория с пакетами/архивами (`.deb`, `.rpm`, `.whl` и др.) |
+| `source_sbom.json` | *(необязательно)* Source SBOM для ghost-dependency diff (передаётся в `sbom_binary.py`) |
+
+### Опции
+
+| Флаг | По умолчанию | Описание |
+|---|---|---|
+| `--unpack-dir <dir>` | `./unpacked` | Общая директория распаковки для обоих инструментов |
+| `--binary-output <file>` | `binary.json` | Выходной файл `sbom_binary.py` |
+| `--repack-output <file>` | `repack.cdx.json` | Выходной файл `sbom_repack_deps.py` |
+| `--output-dir <dir>` | `./debug` | Директория для отчётов о призрачных зависимостях и статистики |
+| `--max-depth <N>` | `8` | Максимальная глубина вложенности архивов (для Trivy-скана) |
+| `--all-deps` | — | Передать `--all-deps` в `sbom_binary.py` |
+| `--trivy-arg <arg>` | — | Дополнительный аргумент для Trivy (повторять для нескольких) |
+
+### Примеры
+
+```bash
+# Базовый запуск
+python3 sbom_tool.py --binary-repack ./packages
+
+# .whl файлы
+python3 sbom_tool.py --binary-repack ./wheels
+
+# С source SBOM для diff
+python3 sbom_tool.py --binary-repack ./packages source-sbom.json
+
+# Явно указать выходные файлы
+python3 sbom_tool.py --binary-repack ./packages \
+  --binary-output binary.json \
+  --repack-output repack.cdx.json \
+  --output-dir ./debug
+```
+
+### Порядок выполнения
+
+1. `sbom_binary.py ./packages --unpack-dir ./unpacked` → `binary.json`
+2. `sbom_repack_deps.py ./packages --unpack-dir ./unpacked` → `repack.cdx.json`
+
+Директория `./unpacked` используется обоими шагами — повторной распаковки не происходит.
+
+### Выходные файлы
+
+| Файл | Описание |
+|---|---|
+| `binary.json` | Бинарный SBOM (Go/Rust/.NET/Java артефакты) |
+| `repack.cdx.json` | CycloneDX SBOM от Trivy по всему распакованному дереву |
+| `debug/binary_filtered.json` | Source SBOM после удаления призрачных зависимостей |
+| `debug/ghost_dependencies.json` | Призрачные зависимости (JSON) |
+| `debug/ghost_dependencies.txt` | Призрачные зависимости (текст) |
+| `debug/binary.errors.txt` | Предупреждения Java/.NET |
+| `debug/repack.stats.json` | Статистика распаковки |
 
 ---
 
@@ -387,20 +421,6 @@ pip install requests openpyxl
 
 | Файл | Скрипт/режим | Описание |
 |---|---|---|
-<<<<<<< HEAD
-| `updated_sbom.json` | `--rpm` | Обогащённый CycloneDX SBOM |
-| `report.txt` | `--rpm` | Расхождения версий между SBOM и эталоном |
-| `cve_report.xlsx` | `--rpm` | CVE-отчёт по пакетам |
-| `sbom.json` | `--deb` | CycloneDX SBOM из .deb-пакетов |
-| `sbom.errors.json` | `--deb` | Пакеты, которые не удалось обработать |
-| `sbom-full.json` | `sbom_binary.py` | Объединённый бинарный SBOM |
-| `ghost-dependencies.json` | `sbom_binary.py` | Призрачные зависимости (JSON) |
-| `ghost-dependencies.txt` | `sbom_binary.py` | Призрачные зависимости (текст) |
-| `sbom-source-filtered.json` | `sbom_binary.py` | Отфильтрованный source SBOM |
-| `errors.txt` | `sbom_binary.py` | Предупреждения Java/.NET |
-| `sbom-repacked-trivy.cdx.json` | `sbom_repack_deps.py` | CycloneDX SBOM от Trivy |
-| `repack-deps.stats.json` | `sbom_repack_deps.py` | Статистика распаковки |
-=======
 | `alt.json` | `--rpm` | Обогащённый CycloneDX SBOM (Alt Linux) |
 | `cve_report_alt.xlsx` | `--rpm` | CVE-отчёт по пакетам |
 | `deb.json` | `--deb` | CycloneDX SBOM из .deb-пакетов |
@@ -413,7 +433,6 @@ pip install requests openpyxl
 | `debug/ghost_dependencies.txt` | `sbom_binary.py` | Призрачные зависимости (текст) |
 | `debug/binary.errors.txt` | `sbom_binary.py` | Предупреждения Java/.NET |
 | `debug/repack.stats.json` | `sbom_repack_deps.py` | Статистика распаковки |
->>>>>>> f97913e (init)
 
 ---
 

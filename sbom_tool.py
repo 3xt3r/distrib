@@ -1846,18 +1846,117 @@ def build_deb_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_binary_repack_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="sbom_tool.py --binary-repack",
+        description=(
+            "Run sbom_binary.py and sbom_repack_deps.py on the same package directory, "
+            "sharing a single unpack step. Produces binary.json and repack.cdx.json."
+        ),
+    )
+    parser.add_argument("pkg_dir", help="Directory with .deb/.rpm/whl/archive packages")
+    parser.add_argument("source_sbom", nargs="?", default="",
+        help="Optional source SBOM JSON for ghost-dependency diff (passed to sbom_binary.py)")
+    parser.add_argument("--unpack-dir", default="./unpacked",
+        help="Shared unpack directory for both tools. Default: ./unpacked")
+    parser.add_argument("--binary-output", default="binary.json",
+        help="Output path for sbom_binary.py result. Default: binary.json")
+    parser.add_argument("--repack-output", default="repack.cdx.json",
+        help="Output path for sbom_repack_deps.py result. Default: repack.cdx.json")
+    parser.add_argument("--output-dir", default="./debug",
+        help="Output directory for ghost-dependencies reports. Default: ./debug")
+    parser.add_argument("--max-depth", type=int, default=8,
+        help="Max nested archive unpack depth for sbom_repack_deps.py. Default: 8")
+    parser.add_argument("--all-deps", action="store_true",
+        help="Pass --all-deps to sbom_binary.py")
+    parser.add_argument("--trivy-arg", action="append", default=[],
+        help="Extra argument passed to Trivy (repeat for multiple)")
+    return parser
+
+
+def cmd_binary_repack(args: argparse.Namespace) -> int:
+    here = Path(__file__).resolve().parent
+    binary_script = here / "sbom_binary.py"
+    repack_script = here / "sbom_repack_deps.py"
+
+    for script in (binary_script, repack_script):
+        if not script.exists():
+            print(f"error: script not found: {script}", file=sys.stderr)
+            return 1
+
+    pkg_dir = Path(args.pkg_dir).resolve()
+    if not pkg_dir.exists() or not pkg_dir.is_dir():
+        print(f"error: pkg_dir does not exist or is not a directory: {pkg_dir}", file=sys.stderr)
+        return 1
+
+    unpack_dir = Path(args.unpack_dir).resolve()
+
+    # ── Step 1: sbom_binary.py ────────────────────────────────────────────────
+    print(f"\n[binary-repack] Step 1/2 — sbom_binary.py → {args.binary_output}\n")
+    binary_cmd = [
+        sys.executable, str(binary_script),
+        str(pkg_dir),
+        "--output", args.binary_output,
+        "--unpack-dir", str(unpack_dir),
+        "--output-dir", args.output_dir,
+        "--errors-output", str(Path(args.output_dir) / "binary.errors.txt"),
+    ]
+    if args.source_sbom:
+        binary_cmd.insert(3, args.source_sbom)
+    if args.all_deps:
+        binary_cmd.append("--all-deps")
+
+    try:
+        rc = subprocess.run(binary_cmd).returncode
+    except KeyboardInterrupt:
+        return 130
+    if rc != 0:
+        print(f"\n[binary-repack] sbom_binary.py exited with code {rc}", file=sys.stderr)
+        return rc
+
+    # ── Step 2: sbom_repack_deps.py — reuse already-unpacked dir ─────────────
+    print(f"\n[binary-repack] Step 2/2 — sbom_repack_deps.py → {args.repack_output}\n")
+    repack_cmd = [
+        sys.executable, str(repack_script),
+        str(pkg_dir),
+        "--output", args.repack_output,
+        "--unpack-dir", str(unpack_dir),
+        "--max-depth", str(args.max_depth),
+        "--stats-output", str(Path(args.output_dir) / "repack.stats.json"),
+    ]
+    for trivy_arg in (args.trivy_arg or []):
+        repack_cmd += ["--trivy-arg", trivy_arg]
+
+    try:
+        rc = subprocess.run(repack_cmd).returncode
+    except KeyboardInterrupt:
+        return 130
+    if rc != 0:
+        print(f"\n[binary-repack] sbom_repack_deps.py exited with code {rc}", file=sys.stderr)
+        return rc
+
+    print(f"\n[binary-repack] Done.")
+    print(f"  binary SBOM : {args.binary_output}")
+    print(f"  repack SBOM : {args.repack_output}")
+    print(f"  debug files : {args.output_dir}/")
+    return 0
+
+
 def print_usage() -> None:
     print(
         "usage: sbom_tool.py --rpm <scan_target> --compare-root <dir> [options]\n"
         "       sbom_tool.py --deb <folder> [package_list.txt] [options]\n"
+        "       sbom_tool.py --binary-repack <pkg_dir> [source_sbom.json] [options]\n"
         "\n"
         "modes:\n"
-        "  --rpm   Run syft on RPM folder, enrich components and write updated SBOM\n"
-        "  --deb   Scan folder with .deb packages and generate CycloneDX SBOM\n"
+        "  --rpm            Run syft on RPM folder, enrich components and write updated SBOM\n"
+        "  --deb            Scan folder with .deb packages and generate CycloneDX SBOM\n"
+        "  --binary-repack  Run sbom_binary.py + sbom_repack_deps.py on same directory\n"
         "\n"
         "pass --help after the mode flag for detailed options, e.g.:\n"
         "  sbom_tool.py --rpm --help\n"
-        "  sbom_tool.py --deb --help\n",
+        "  sbom_tool.py --deb --help\n"
+        "  sbom_tool.py --binary-repack --help\n",
         file=sys.stderr,
     )
 
@@ -1881,6 +1980,11 @@ def main() -> int:
         parser = build_deb_parser()
         args = parser.parse_args(rest)
         return cmd_deb(args)
+
+    if mode == "--binary-repack":
+        parser = build_binary_repack_parser()
+        args = parser.parse_args(rest)
+        return cmd_binary_repack(args)
 
     print(f"error: unknown mode '{mode}'\n", file=sys.stderr)
     print_usage()
