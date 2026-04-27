@@ -2053,6 +2053,8 @@ def build_scan_full_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bin", dest="bin_dir", default="",
         help="Separate directory for binary-repack step (sbom_binary + Trivy). "
              "If not set, scan_dir is used for binary-repack.")
+    parser.add_argument("--env", default="",
+        help="Path to .env file with Dependency Track credentials (e.g. --env .env)")
     parser.add_argument("--output-dir", default="./debug",
         help="Directory for debug/report files. Default: ./debug")
     return parser
