@@ -198,6 +198,10 @@ def _extract_home_page(meta: Dict[str, str]) -> str:
     return ""
 
 
+def _make_purl(name: str, version: str) -> str:
+    return f"pkg:pypi/{name}@{version}"
+
+
 def _make_component(info: WheelInfo) -> Dict[str, Any]:
     purl = _make_purl(info.name, info.version)
     comp: Dict[str, Any] = {
