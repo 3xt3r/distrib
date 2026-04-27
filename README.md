@@ -329,6 +329,46 @@ Pillow-10.0.0-...-any.whl         → pkg:pypi/pillow@10.0.0
 
 ---
 
+## Интеграция с Dependency Track
+
+`--scan-full` автоматически заливает SBOM в Dependency Track если заданы переменные окружения. Настройка через `.env` файл или export:
+
+```bash
+export DEPENDENCY_TRACK_URL=https://dt.example.com
+export DEPENDENCY_TRACK_API_KEY=odt_your_api_key_here
+export DEPENDENCY_TRACK_INSECURE=false
+
+export DEPENDENCY_TRACK_PROJECT_PACKAGES=<uuid>   # rpm или deb SBOM
+export DEPENDENCY_TRACK_PROJECT_BINARY=<uuid>     # binary.json
+export DEPENDENCY_TRACK_PROJECT_REPACK=<uuid>     # repack.cdx.json
+```
+
+Пример `.env.example` включён в архив.
+
+### Переменные окружения
+
+| Переменная | Обязательно | Описание |
+|---|---|---|
+| `DEPENDENCY_TRACK_URL` | да | URL сервера, например `https://dt.example.com` |
+| `DEPENDENCY_TRACK_API_KEY` | да | API-ключ (Automation в настройках DT) |
+| `DEPENDENCY_TRACK_INSECURE` | нет | `true` — отключить проверку TLS-сертификата |
+| `DEPENDENCY_TRACK_PROJECT_PACKAGES` | нет | UUID проекта для rpm/deb SBOM |
+| `DEPENDENCY_TRACK_PROJECT_BINARY` | нет | UUID проекта для `binary.json` |
+| `DEPENDENCY_TRACK_PROJECT_REPACK` | нет | UUID проекта для `repack.cdx.json` |
+
+### Логика заливки
+
+| SBOM файл | Заливается в проект |
+|---|---|
+| `alt.json` (rpm) | `DEPENDENCY_TRACK_PROJECT_PACKAGES` |
+| `deb.json` | `DEPENDENCY_TRACK_PROJECT_PACKAGES` |
+| `binary.json` | `DEPENDENCY_TRACK_PROJECT_BINARY` |
+| `repack.cdx.json` | `DEPENDENCY_TRACK_PROJECT_REPACK` |
+
+Если `DEPENDENCY_TRACK_URL` или `DEPENDENCY_TRACK_API_KEY` не заданы — шаг заливки молча пропускается. Если UUID конкретного проекта не задан — этот файл не заливается, остальные заливаются в штатном режиме. Заливка fire-and-forget: скрипт не ждёт завершения обработки в DT.
+
+---
+
 ## Зависимости
 
 | Инструмент / библиотека | Нужен для |
@@ -342,7 +382,7 @@ Pillow-10.0.0-...-any.whl         → pkg:pypi/pillow@10.0.0
 | `strings`, `file` | `sbom_binary.py` |
 | `7z` / `7za` | `sbom_repack_deps.py` (опционально) |
 | `zstd` / `unzstd` | `sbom_repack_deps.py` (опционально) |
-| `requests` | `sbom_alt_cve_working.py` |
+| `requests` | `sbom_alt_cve_working.py`, Dependency Track upload |
 | `openpyxl` | `sbom_alt_cve_working.py` |
 
 ```bash

@@ -2050,8 +2050,8 @@ def build_scan_full_parser() -> argparse.ArgumentParser:
         help="ALT Linux branch for CVE scan")
     parser.add_argument("--cve-output", default="cve_report_alt.xlsx",
         help="CVE XLSX output path. Default: cve_report_alt.xlsx")
-    parser.add_argument("-o", "--output", default="merged.json",
-        help="Final merged SBOM path. Default: merged.json")
+    parser.add_argument("--env", default="",
+        help="Path to .env file with Dependency Track credentials (e.g. --env .env)")
     parser.add_argument("--output-dir", default="./debug",
         help="Directory for debug/report files. Default: ./debug")
     return parser
@@ -2119,23 +2119,103 @@ def _merge_sboms(sbom_files: List[Path], output_file: Path, source_dir: Path) ->
     return merged
 
 
+def _load_env_file(env_file: str) -> None:
+    """Load key=value pairs from a .env file into os.environ (does not override existing vars)."""
+    path = Path(env_file)
+    if not path.exists():
+        print(f"[env] warning: env file not found: {env_file}", file=sys.stderr)
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+    print(f"[env] loaded: {env_file}")
+    """
+    Load Dependency Track config from environment variables.
+    Returns None if DT is not configured (URL or API key missing).
+
+    Required env vars:
+      DEPENDENCY_TRACK_URL      e.g. https://dt.example.com
+      DEPENDENCY_TRACK_API_KEY  e.g. odt_...
+
+    Optional:
+      DEPENDENCY_TRACK_INSECURE          true/1  — skip TLS verification
+      DEPENDENCY_TRACK_PROJECT_PACKAGES  UUID    — project for rpm/deb SBOM
+      DEPENDENCY_TRACK_PROJECT_BINARY    UUID    — project for binary.json
+      DEPENDENCY_TRACK_PROJECT_REPACK    UUID    — project for repack.cdx.json
+    """
+    url = os.environ.get("DEPENDENCY_TRACK_URL", "").rstrip("/")
+    api_key = os.environ.get("DEPENDENCY_TRACK_API_KEY", "")
+    if not url or not api_key:
+        return None
+    insecure_raw = os.environ.get("DEPENDENCY_TRACK_INSECURE", "").lower()
+    return {
+        "url": url,
+        "api_key": api_key,
+        "insecure": insecure_raw in ("true", "1", "yes"),
+        "project_packages": os.environ.get("DEPENDENCY_TRACK_PROJECT_PACKAGES", ""),
+        "project_binary":   os.environ.get("DEPENDENCY_TRACK_PROJECT_BINARY", ""),
+        "project_repack":   os.environ.get("DEPENDENCY_TRACK_PROJECT_REPACK", ""),
+    }
+
+
+def _dt_upload(sbom_path: Path, project_uuid: str, cfg: Dict[str, Any]) -> bool:
+    """
+    Upload a single SBOM file to Dependency Track (fire-and-forget).
+    Returns True on success, False on any error.
+    """
+    if not project_uuid:
+        print(f"[dt] skip {sbom_path.name} — no project UUID configured")
+        return False
+
+    try:
+        import base64
+        import requests as _requests
+        bom_b64 = base64.b64encode(sbom_path.read_bytes()).decode("ascii")
+        resp = _requests.put(
+            f"{cfg['url']}/api/v1/bom",
+            headers={"X-API-Key": cfg["api_key"], "Content-Type": "application/json"},
+            json={"project": project_uuid, "bom": bom_b64, "autoCreate": False},
+            timeout=120,
+            verify=not cfg["insecure"],
+        )
+        resp.raise_for_status()
+        token = (resp.json().get("token") or "").strip()
+        print(f"[dt] uploaded {sbom_path.name} → project {project_uuid} (token={token or 'n/a'})")
+        return True
+    except Exception as exc:
+        print(f"[dt] warning: upload {sbom_path.name} failed: {exc}", file=sys.stderr)
+        return False
+
+
 def cmd_scan_full(args: argparse.Namespace) -> int:
     scan_dir = Path(args.scan_dir).resolve()
     if not scan_dir.exists() or not scan_dir.is_dir():
         print(f"error: scan_dir does not exist: {scan_dir}", file=sys.stderr)
         return 1
 
+    # Load .env file before anything else
+    if args.env:
+        _load_env_file(args.env)
+
     found = _detect_content(scan_dir)
     print(f"\n[scan-full] Scanning: {scan_dir}")
-    print(f"[scan-full] Detected: " + ", ".join(k for k, v in found.items() if v) or "nothing")
+    print(f"[scan-full] Detected: " + (", ".join(k for k, v in found.items() if v) or "nothing"))
 
     if found["rpm"] and not args.compare_root:
         print("error: .rpm files found but --compare-root is not set", file=sys.stderr)
         return 1
 
-    if not any(found.values()):
-        print("[scan-full] No known package types found — nothing to do", file=sys.stderr)
-        return 1
+    dt_cfg = _dt_load_cfg()
+    if dt_cfg:
+        print(f"[dt] Dependency Track configured: {dt_cfg['url']}")
+    else:
+        print("[dt] Dependency Track not configured (DEPENDENCY_TRACK_URL / DEPENDENCY_TRACK_API_KEY not set)")
 
     produced: List[Path] = []
     rc_total = 0
@@ -2163,7 +2243,10 @@ def cmd_scan_full(args: argparse.Namespace) -> int:
             print(f"[scan-full] rpm step failed (code {rc})", file=sys.stderr)
             rc_total = rc
         else:
-            produced.append(Path(UPDATED_SBOM_FILE_DEFAULT).resolve())
+            alt_path = Path(UPDATED_SBOM_FILE_DEFAULT).resolve()
+            produced.append(alt_path)
+            if dt_cfg:
+                _dt_upload(alt_path, dt_cfg["project_packages"], dt_cfg)
 
     # ── Step 2: deb ───────────────────────────────────────────────────────────
     if found["deb"]:
@@ -2186,30 +2269,38 @@ def cmd_scan_full(args: argparse.Namespace) -> int:
             print(f"[scan-full] deb step failed (code {rc})", file=sys.stderr)
             rc_total = rc
         else:
-            produced.append(Path("deb.json").resolve())
+            deb_path = Path("deb.json").resolve()
+            produced.append(deb_path)
+            if dt_cfg:
+                _dt_upload(deb_path, dt_cfg["project_packages"], dt_cfg)
 
-    # ── Step 3: binary-repack (for archives + whl, skip if only rpm/deb) ─────
-    if found["whl"] or found["archives"]:
-        print(f"\n{'='*60}")
-        print(f"[scan-full] Step: binary-repack  ({scan_dir})")
-        print(f"{'='*60}")
-        br_argv = [
-            str(scan_dir),
-            "--binary-output", "binary.json",
-            "--repack-output", "repack.cdx.json",
-            "--output-dir", args.output_dir,
-            "--max-depth", str(args.max_depth),
-        ]
-        if args.source_sbom:
-            br_argv.insert(1, args.source_sbom)
+    # ── Step 3: binary-repack ─────────────────────────────────────────────────
+    # ── Step 3: binary-repack — always runs ──────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"[scan-full] Step: binary-repack  ({scan_dir})")
+    print(f"{'='*60}")
+    br_argv = [
+        str(scan_dir),
+        "--binary-output", "binary.json",
+        "--repack-output", "repack.cdx.json",
+        "--output-dir", args.output_dir,
+        "--max-depth", str(args.max_depth),
+    ]
+    if args.source_sbom:
+        br_argv.insert(1, args.source_sbom)
 
-        br_args = build_binary_repack_parser().parse_args(br_argv)
-        rc = cmd_binary_repack(br_args)
-        if rc != 0:
-            print(f"[scan-full] binary-repack step failed (code {rc})", file=sys.stderr)
-            rc_total = rc
-        else:
-            produced.append(Path("binary.json").resolve())
+    br_args = build_binary_repack_parser().parse_args(br_argv)
+    rc = cmd_binary_repack(br_args)
+    if rc != 0:
+        print(f"[scan-full] binary-repack step failed (code {rc})", file=sys.stderr)
+        rc_total = rc
+    else:
+        binary_path = Path("binary.json").resolve()
+        repack_path = Path("repack.cdx.json").resolve()
+        produced.append(binary_path)
+        if dt_cfg:
+            _dt_upload(binary_path, dt_cfg["project_binary"], dt_cfg)
+            _dt_upload(repack_path, dt_cfg["project_repack"], dt_cfg)
 
     # ── Step 4: merge ─────────────────────────────────────────────────────────
     if not produced:
@@ -2240,7 +2331,7 @@ def print_usage() -> None:
         "usage: sbom_tool.py --rpm <scan_target> --compare-root <dir> [options]\n"
         "       sbom_tool.py --deb <folder> [package_list.txt] [options]\n"
         "       sbom_tool.py --binary-repack <pkg_dir> [source_sbom.json] [options]\n"
-        "       sbom_tool.py --scan-full [--rpm <dir> --compare-root <dir>] [--deb <dir>] [--binary-repack <dir>] [options]\n"
+        "       sbom_tool.py --scan-full <dir> --compare-root <dir> --env <file> [options]\n"
         "\n"
         "modes:\n"
         "  --rpm            Run syft on RPM folder, enrich components and write updated SBOM\n"
