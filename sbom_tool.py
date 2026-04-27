@@ -2055,6 +2055,8 @@ def build_scan_full_parser() -> argparse.ArgumentParser:
              "If not set, scan_dir is used for binary-repack.")
     parser.add_argument("--env", default="",
         help="Path to .env file with Dependency Track credentials (e.g. --env .env)")
+    parser.add_argument("-o", "--output", default="merged.json",
+        help="Final merged SBOM path. Default: merged.json")
     parser.add_argument("--output-dir", default="./debug",
         help="Directory for debug/report files. Default: ./debug")
     return parser
@@ -2200,20 +2202,28 @@ def _dt_load_cfg() -> Optional[Dict[str, Any]]:
 def _dt_upload(sbom_path: Path, project_uuid: str, cfg: Dict[str, Any]) -> bool:
     """
     Upload a single SBOM file to Dependency Track (fire-and-forget).
+    If project_uuid is set — uploads to that project.
+    If not — creates project automatically by filename (autoCreate=True).
     Returns True on success, False on any error.
     """
-    if not project_uuid:
-        print(f"[dt] skip {sbom_path.name} — no project UUID configured")
-        return False
-
     try:
         import base64
         import requests as _requests
         bom_b64 = base64.b64encode(sbom_path.read_bytes()).decode("ascii")
+        payload: Dict[str, Any] = {
+            "bom": bom_b64,
+            "autoCreate": True,
+        }
+        if project_uuid:
+            payload["project"] = project_uuid
+        else:
+            # autoCreate by name when no UUID given
+            payload["projectName"] = sbom_path.stem
+            payload["projectVersion"] = "latest"
         resp = _requests.put(
             f"{cfg['url']}/api/v1/bom",
             headers={"X-API-Key": cfg["api_key"], "Content-Type": "application/json"},
-            json={"project": project_uuid, "bom": bom_b64, "autoCreate": False},
+            json=payload,
             timeout=120,
             verify=not cfg["insecure"],
         )
