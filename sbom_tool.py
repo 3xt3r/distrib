@@ -847,6 +847,8 @@ def cmd_deb(args: argparse.Namespace) -> int:
     print(f"Dependencies included: {'yes' if args.with_dependencies else 'no'}")
     print("Reorder applied: yes")
 
+    merge_whl_into_sbom(sbom, folder, out_path)
+
     if listed_packages:
         astra_count = sum(1 for p in packages if p.provided_by == "Astra Linux")
 
@@ -1706,6 +1708,8 @@ def cmd_rpm(args: argparse.Namespace) -> int:
     print("Reorder applied: yes")
     print(json.dumps(stats, ensure_ascii=False, indent=2))
 
+    merge_whl_into_sbom(cdx, scan_target, updated_sbom_file)
+
     should_run_cve = bool(getattr(args, "auto_cve_rpm", False)) or getattr(args, "cve_rpm_args", None) is not None
 
     if should_run_cve:
@@ -1788,6 +1792,84 @@ def cmd_repack_deps(args: argparse.Namespace) -> int:
         return subprocess.run(cmd).returncode
     except KeyboardInterrupt:
         return 130
+
+
+def merge_whl_into_sbom(
+    sbom: Dict[str, Any],
+    scan_dir: Path,
+    output_file: Path,
+) -> int:
+    """
+    If .whl files are found in scan_dir, run sbom_whl.py on them,
+    load the result and merge its components into sbom in-place.
+    Writes the merged SBOM back to output_file.
+    Returns number of whl components merged (0 = nothing to do).
+    """
+    whl_files = list(scan_dir.rglob("*.whl"))
+    if not whl_files:
+        return 0
+
+    print(f"\n[whl] Found {len(whl_files)} .whl file(s) in {scan_dir} — running sbom_whl.py")
+
+    whl_script = Path(__file__).resolve().with_name("sbom_whl.py")
+    if not whl_script.is_file():
+        print(f"[whl] warning: sbom_whl.py not found at {whl_script} — skipping", file=sys.stderr)
+        return 0
+
+    tmp_whl_sbom = output_file.with_name(output_file.stem + ".whl.tmp.json")
+    tmp_errors = output_file.parent / "debug" / "whl.errors.json"
+
+    cmd = [
+        sys.executable, str(whl_script),
+        str(scan_dir),
+        "-o", str(tmp_whl_sbom),
+        "--errors-output", str(tmp_errors),
+    ]
+    try:
+        rc = subprocess.run(cmd).returncode
+    except KeyboardInterrupt:
+        return 0
+
+    if rc != 0:
+        print(f"[whl] warning: sbom_whl.py exited with code {rc} — skipping merge", file=sys.stderr)
+        return 0
+
+    if not tmp_whl_sbom.exists():
+        print("[whl] warning: sbom_whl.py produced no output — skipping merge", file=sys.stderr)
+        return 0
+
+    try:
+        whl_sbom = json.loads(tmp_whl_sbom.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[whl] warning: could not read whl SBOM: {e} — skipping merge", file=sys.stderr)
+        return 0
+    finally:
+        try:
+            tmp_whl_sbom.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    whl_components = whl_sbom.get("components") or []
+    if not whl_components:
+        return 0
+
+    # Dedup by purl — don't add if already present in main SBOM
+    existing_purls = {
+        c.get("purl") for c in (sbom.get("components") or []) if c.get("purl")
+    }
+    new_components = [c for c in whl_components if c.get("purl") not in existing_purls]
+    skipped = len(whl_components) - len(new_components)
+
+    sbom.setdefault("components", []).extend(new_components)
+    sbom["components"] = reorder_components({"components": sbom["components"]})["components"]
+
+    output_file.write_text(json.dumps(sbom, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    print(f"[whl] Merged {len(new_components)} whl component(s) into {output_file}")
+    if skipped:
+        print(f"[whl] Skipped {skipped} duplicate(s) already present in SBOM")
+
+    return len(new_components)
 
 
 # =============================================================================
