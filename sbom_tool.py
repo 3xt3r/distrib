@@ -2050,8 +2050,9 @@ def build_scan_full_parser() -> argparse.ArgumentParser:
         help="ALT Linux branch for CVE scan")
     parser.add_argument("--cve-output", default="cve_report_alt.xlsx",
         help="CVE XLSX output path. Default: cve_report_alt.xlsx")
-    parser.add_argument("--env", default="",
-        help="Path to .env file with Dependency Track credentials (e.g. --env .env)")
+    parser.add_argument("--bin", dest="bin_dir", default="",
+        help="Separate directory for binary-repack step (sbom_binary + Trivy). "
+             "If not set, scan_dir is used for binary-repack.")
     parser.add_argument("--output-dir", default="./debug",
         help="Directory for debug/report files. Default: ./debug")
     return parser
@@ -2135,6 +2136,36 @@ def _load_env_file(env_file: str) -> None:
         if key and key not in os.environ:
             os.environ[key] = value
     print(f"[env] loaded: {env_file}")
+    """
+    Load Dependency Track config from environment variables.
+    Returns None if DT is not configured (URL or API key missing).
+
+    Required env vars:
+      DEPENDENCY_TRACK_URL      e.g. https://dt.example.com
+      DEPENDENCY_TRACK_API_KEY  e.g. odt_...
+
+    Optional:
+      DEPENDENCY_TRACK_INSECURE          true/1  — skip TLS verification
+      DEPENDENCY_TRACK_PROJECT_PACKAGES  UUID    — project for rpm/deb SBOM
+      DEPENDENCY_TRACK_PROJECT_BINARY    UUID    — project for binary.json
+      DEPENDENCY_TRACK_PROJECT_REPACK    UUID    — project for repack.cdx.json
+    """
+    url = os.environ.get("DEPENDENCY_TRACK_URL", "").rstrip("/")
+    api_key = os.environ.get("DEPENDENCY_TRACK_API_KEY", "")
+    if not url or not api_key:
+        return None
+    insecure_raw = os.environ.get("DEPENDENCY_TRACK_INSECURE", "").lower()
+    return {
+        "url": url,
+        "api_key": api_key,
+        "insecure": insecure_raw in ("true", "1", "yes"),
+        "project_packages": os.environ.get("DEPENDENCY_TRACK_PROJECT_PACKAGES", ""),
+        "project_binary":   os.environ.get("DEPENDENCY_TRACK_PROJECT_BINARY", ""),
+        "project_repack":   os.environ.get("DEPENDENCY_TRACK_PROJECT_REPACK", ""),
+    }
+
+
+def _dt_load_cfg() -> Optional[Dict[str, Any]]:
     """
     Load Dependency Track config from environment variables.
     Returns None if DT is not configured (URL or API key missing).
@@ -2276,11 +2307,12 @@ def cmd_scan_full(args: argparse.Namespace) -> int:
 
     # ── Step 3: binary-repack ─────────────────────────────────────────────────
     # ── Step 3: binary-repack — always runs ──────────────────────────────────
+    binary_repack_dir = Path(args.bin_dir).resolve() if args.bin_dir else scan_dir
     print(f"\n{'='*60}")
-    print(f"[scan-full] Step: binary-repack  ({scan_dir})")
+    print(f"[scan-full] Step: binary-repack  ({binary_repack_dir})")
     print(f"{'='*60}")
     br_argv = [
-        str(scan_dir),
+        str(binary_repack_dir),
         "--binary-output", "binary.json",
         "--repack-output", "repack.cdx.json",
         "--output-dir", args.output_dir,
