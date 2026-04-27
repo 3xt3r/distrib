@@ -2024,21 +2024,235 @@ def cmd_binary_repack(args: argparse.Namespace) -> int:
     return 0
 
 
+def build_scan_full_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="sbom_tool.py --scan-full",
+        description=(
+            "Full scan pipeline: auto-detect .rpm/.deb/.whl in a single directory, "
+            "run the appropriate steps, and merge all results into merged.json."
+        ),
+    )
+    parser.add_argument("scan_dir",
+        help="Directory containing packages (any mix of .rpm, .deb, .whl, archives)")
+    parser.add_argument("--compare-root", default="",
+        help="Reference RPM directory for SHA-256 comparison (required if .rpm files are found)")
+    parser.add_argument("--package-list", default="",
+        help="TXT file with Debian package filenames for GOST:provided_by marking (deb step)")
+    parser.add_argument("--with-dependencies", action="store_true",
+        help="Include internal .deb dependency graph in SBOM (deb step)")
+    parser.add_argument("--source-sbom", default="",
+        help="Source SBOM JSON for ghost-dependency diff (binary-repack step)")
+    parser.add_argument("--max-depth", type=int, default=8,
+        help="Max archive unpack depth for Trivy. Default: 8")
+    parser.add_argument("--no-cve-rpm", dest="auto_cve_rpm", action="store_false", default=True,
+        help="Disable automatic CVE scan after rpm step")
+    parser.add_argument("--cve-branch", choices=["p9", "p10", "p11", "c9f2", "c10f2"], default="",
+        help="ALT Linux branch for CVE scan")
+    parser.add_argument("--cve-output", default="cve_report_alt.xlsx",
+        help="CVE XLSX output path. Default: cve_report_alt.xlsx")
+    parser.add_argument("-o", "--output", default="merged.json",
+        help="Final merged SBOM path. Default: merged.json")
+    parser.add_argument("--output-dir", default="./debug",
+        help="Directory for debug/report files. Default: ./debug")
+    return parser
+
+
+def _detect_content(scan_dir: Path) -> Dict[str, bool]:
+    """Detect which package types are present in scan_dir (recursive)."""
+    return {
+        "rpm": any(scan_dir.rglob("*.rpm")),
+        "deb": any(scan_dir.rglob("*.deb")),
+        "whl": any(scan_dir.rglob("*.whl")),
+        "archives": any(
+            f for ext in ("*.zip", "*.jar", "*.war", "*.tar.gz", "*.tar.bz2",
+                          "*.tar.xz", "*.7z", "*.tar.zst")
+            for f in scan_dir.rglob(ext)
+        ),
+    }
+
+
+def _merge_sboms(sbom_files: List[Path], output_file: Path, source_dir: Path) -> Dict[str, Any]:
+    """Load multiple CycloneDX SBOMs and merge all components into one, dedup by purl."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    merged_components: List[Dict[str, Any]] = []
+    seen_purls: set = set()
+
+    for f in sbom_files:
+        if not f.exists():
+            print(f"  [merge] skip missing: {f}")
+            continue
+        try:
+            sbom = json.loads(f.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"  [merge] could not read {f}: {e}")
+            continue
+        for comp in sbom.get("components") or []:
+            purl = comp.get("purl") or comp.get("bom-ref") or comp.get("name")
+            if purl in seen_purls:
+                continue
+            seen_purls.add(purl)
+            merged_components.append(comp)
+
+    merged_components = reorder_components({"components": merged_components})["components"]
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    merged: Dict[str, Any] = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.6",
+        "serialNumber": f"urn:uuid:{_uuid.uuid4()}",
+        "version": 1,
+        "metadata": {
+            "timestamp": now,
+            "tools": [{"vendor": "sbom_tool", "name": "sbom_tool.py --scan-full"}],
+            "component": {
+                "type": "application",
+                "name": source_dir.name,
+            },
+        },
+        "components": merged_components,
+    }
+
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text(json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return merged
+
+
+def cmd_scan_full(args: argparse.Namespace) -> int:
+    scan_dir = Path(args.scan_dir).resolve()
+    if not scan_dir.exists() or not scan_dir.is_dir():
+        print(f"error: scan_dir does not exist: {scan_dir}", file=sys.stderr)
+        return 1
+
+    found = _detect_content(scan_dir)
+    print(f"\n[scan-full] Scanning: {scan_dir}")
+    print(f"[scan-full] Detected: " + ", ".join(k for k, v in found.items() if v) or "nothing")
+
+    if found["rpm"] and not args.compare_root:
+        print("error: .rpm files found but --compare-root is not set", file=sys.stderr)
+        return 1
+
+    if not any(found.values()):
+        print("[scan-full] No known package types found — nothing to do", file=sys.stderr)
+        return 1
+
+    produced: List[Path] = []
+    rc_total = 0
+
+    # ── Step 1: rpm ───────────────────────────────────────────────────────────
+    if found["rpm"]:
+        print(f"\n{'='*60}")
+        print(f"[scan-full] Step: rpm  ({scan_dir})")
+        print(f"{'='*60}")
+        rpm_argv = [
+            str(scan_dir),
+            "--compare-root", args.compare_root,
+            "--output", UPDATED_SBOM_FILE_DEFAULT,
+            "--report", REPORT_FILE_DEFAULT,
+            "--cve-output", args.cve_output,
+        ]
+        if not args.auto_cve_rpm:
+            rpm_argv.append("--no-cve-rpm")
+        if args.cve_branch:
+            rpm_argv += ["--cve-branch", args.cve_branch]
+
+        rpm_args = build_rpm_parser().parse_args(rpm_argv)
+        rc = cmd_rpm(rpm_args)
+        if rc != 0:
+            print(f"[scan-full] rpm step failed (code {rc})", file=sys.stderr)
+            rc_total = rc
+        else:
+            produced.append(Path(UPDATED_SBOM_FILE_DEFAULT).resolve())
+
+    # ── Step 2: deb ───────────────────────────────────────────────────────────
+    if found["deb"]:
+        print(f"\n{'='*60}")
+        print(f"[scan-full] Step: deb  ({scan_dir})")
+        print(f"{'='*60}")
+        deb_argv = [
+            str(scan_dir),
+            "--output", "deb.json",
+            "--errors-output", f"{args.output_dir}/deb.errors.json",
+        ]
+        if args.package_list:
+            deb_argv.insert(1, args.package_list)
+        if args.with_dependencies:
+            deb_argv.append("--with-dependencies")
+
+        deb_args = build_deb_parser().parse_args(deb_argv)
+        rc = cmd_deb(deb_args)
+        if rc != 0:
+            print(f"[scan-full] deb step failed (code {rc})", file=sys.stderr)
+            rc_total = rc
+        else:
+            produced.append(Path("deb.json").resolve())
+
+    # ── Step 3: binary-repack (for archives + whl, skip if only rpm/deb) ─────
+    if found["whl"] or found["archives"]:
+        print(f"\n{'='*60}")
+        print(f"[scan-full] Step: binary-repack  ({scan_dir})")
+        print(f"{'='*60}")
+        br_argv = [
+            str(scan_dir),
+            "--binary-output", "binary.json",
+            "--repack-output", "repack.cdx.json",
+            "--output-dir", args.output_dir,
+            "--max-depth", str(args.max_depth),
+        ]
+        if args.source_sbom:
+            br_argv.insert(1, args.source_sbom)
+
+        br_args = build_binary_repack_parser().parse_args(br_argv)
+        rc = cmd_binary_repack(br_args)
+        if rc != 0:
+            print(f"[scan-full] binary-repack step failed (code {rc})", file=sys.stderr)
+            rc_total = rc
+        else:
+            produced.append(Path("binary.json").resolve())
+
+    # ── Step 4: merge ─────────────────────────────────────────────────────────
+    if not produced:
+        print("\n[scan-full] No SBOM files produced — nothing to merge", file=sys.stderr)
+        return rc_total or 1
+
+    print(f"\n{'='*60}")
+    print(f"[scan-full] Merging {len(produced)} SBOM(s) → {args.output}")
+    for f in produced:
+        print(f"  {f.name}")
+    print(f"{'='*60}")
+
+    merged = _merge_sboms(produced, Path(args.output).resolve(), scan_dir)
+
+    print(f"\n[scan-full] Done.")
+    print(f"  merged SBOM  : {args.output}  ({len(merged['components'])} components)")
+    for f in produced:
+        print(f"  {f.name}")
+    print(f"  debug files  : {args.output_dir}/")
+
+    return rc_total
+
+
+
+
 def print_usage() -> None:
     print(
         "usage: sbom_tool.py --rpm <scan_target> --compare-root <dir> [options]\n"
         "       sbom_tool.py --deb <folder> [package_list.txt] [options]\n"
         "       sbom_tool.py --binary-repack <pkg_dir> [source_sbom.json] [options]\n"
+        "       sbom_tool.py --scan-full [--rpm <dir> --compare-root <dir>] [--deb <dir>] [--binary-repack <dir>] [options]\n"
         "\n"
         "modes:\n"
         "  --rpm            Run syft on RPM folder, enrich components and write updated SBOM\n"
         "  --deb            Scan folder with .deb packages and generate CycloneDX SBOM\n"
         "  --binary-repack  Run sbom_binary.py + sbom_repack_deps.py on same directory\n"
+        "  --scan-full      Run any combination of the above and merge into merged.json\n"
         "\n"
         "pass --help after the mode flag for detailed options, e.g.:\n"
         "  sbom_tool.py --rpm --help\n"
         "  sbom_tool.py --deb --help\n"
-        "  sbom_tool.py --binary-repack --help\n",
+        "  sbom_tool.py --binary-repack --help\n"
+        "  sbom_tool.py --scan-full --help\n",
         file=sys.stderr,
     )
 
@@ -2067,6 +2281,11 @@ def main() -> int:
         parser = build_binary_repack_parser()
         args = parser.parse_args(rest)
         return cmd_binary_repack(args)
+
+    if mode == "--scan-full":
+        parser = build_scan_full_parser()
+        args = parser.parse_args(rest)
+        return cmd_scan_full(args)
 
     print(f"error: unknown mode '{mode}'\n", file=sys.stderr)
     print_usage()
