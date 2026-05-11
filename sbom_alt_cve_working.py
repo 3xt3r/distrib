@@ -6,15 +6,6 @@ Usage:
   python3 sbom_alt_cve_working.py inventory.cdx.json --c10f2 -o report.xlsx
   python3 sbom_alt_cve_working.py inventory.cdx.json --p10 --json
   python3 sbom_alt_cve_working.py --update-cache --c10f2
-
-Requires:
-  pip install requests openpyxl
-
-Notes:
-  - Scans ALT Linux RPM packages via ALT OVAL feed.
-  - Matches OVAL entries by source package only to reduce false positives.
-  - Exports a deliberately simple XLSX to avoid LibreOffice/Excel corruption.
-  - Uses python rpm bindings if available; otherwise uses a pure Python rpmvercmp fallback.
 """
 
 from __future__ import annotations

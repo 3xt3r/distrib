@@ -31,10 +31,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-# ---------------------------------------------------------------------------
-# Wheel filename grammar  (PEP 427)
-# {distribution}-{version}(-{build})?-{python}-{abi}-{platform}.whl
-# ---------------------------------------------------------------------------
 _WHL_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?)"
     r"-(?P<version>[^-]+)"
@@ -60,13 +56,9 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Metadata extraction
-# ---------------------------------------------------------------------------
-
 @dataclass
 class WheelInfo:
-    name: str           # normalised (PEP 503)
+    name: str           
     version: str
     summary: str = ""
     home_page: str = ""
@@ -75,7 +67,7 @@ class WheelInfo:
     requires_python: str = ""
     sha256: str = ""
     filename: str = ""
-    source: str = ""    # "metadata" | "filename"
+    source: str = ""    
 
 
 def _parse_metadata_text(text: str) -> Dict[str, str]:
@@ -83,7 +75,7 @@ def _parse_metadata_text(text: str) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for line in text.splitlines():
         if line.startswith(" ") or line.startswith("\t"):
-            continue  # folded continuation – skip for simple fields
+            continue  
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
