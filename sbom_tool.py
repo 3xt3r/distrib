@@ -1588,6 +1588,34 @@ def apply_component_reference_policy(cdx: Dict[str, Any]) -> Dict[str, int]:
     return stats
 
 
+def normalize_rpm_filenames(src_dir: Path, tmp_dir: Path) -> Path:
+    """
+    Копирует .rpm файлы из src_dir во tmp_dir с декодированными именами.
+    Нужно когда файлы содержат %XX или @ в имени — rpm и syft их не читают.
+    Возвращает tmp_dir если были проблемные файлы, иначе src_dir.
+    """
+    import urllib.parse as _up
+    rpm_files = list(src_dir.rglob("*.rpm"))
+    needs_fix = any(
+        _up.unquote(f.name) != f.name or "@" in f.name
+        for f in rpm_files
+    )
+    if not needs_fix:
+        return src_dir
+
+    print(f"[rpm] normalizing {len(rpm_files)} RPM filename(s) -> {tmp_dir}")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    for src in rpm_files:
+        decoded = _up.unquote(src.name).replace("@", "_")
+        dst = tmp_dir / decoded
+        if not dst.exists():
+            shutil.copy2(src, dst)
+            print(f"  {src.name} -> {decoded}")
+
+    return tmp_dir
+
+
 def cmd_rpm(args: argparse.Namespace) -> int:
     if shutil.which("syft") is None:
         print("error: syft not found in PATH", file=sys.stderr)
