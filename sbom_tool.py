@@ -2328,9 +2328,12 @@ def cmd_scan_full(args: argparse.Namespace) -> int:
             rc_total = rc
         else:
             alt_path = Path(UPDATED_SBOM_FILE_DEFAULT).resolve()
-            produced.append(alt_path)
-            if dt_cfg:
+            if alt_path.exists():
+                produced.append(alt_path)
+            if dt_cfg and dt_cfg.get("project_packages"):
                 _dt_upload(alt_path, dt_cfg["project_packages"], dt_cfg)
+            elif dt_cfg:
+                print("[dt] skip package SBOM upload: DEPENDENCY_TRACK_PROJECT_PACKAGES is not set")
 
     # ── Step 2: deb ───────────────────────────────────────────────────────────
     if found["deb"]:
@@ -2354,9 +2357,12 @@ def cmd_scan_full(args: argparse.Namespace) -> int:
             rc_total = rc
         else:
             deb_path = Path("deb.json").resolve()
-            produced.append(deb_path)
-            if dt_cfg:
+            if deb_path.exists():
+                produced.append(deb_path)
+            if dt_cfg and dt_cfg.get("project_packages"):
                 _dt_upload(deb_path, dt_cfg["project_packages"], dt_cfg)
+            elif dt_cfg:
+                print("[dt] skip package SBOM upload: DEPENDENCY_TRACK_PROJECT_PACKAGES is not set")
 
     # ── Step 3: binary-repack ─────────────────────────────────────────────────
     # ── Step 3: binary-repack — always runs ──────────────────────────────────
@@ -2382,10 +2388,20 @@ def cmd_scan_full(args: argparse.Namespace) -> int:
     else:
         binary_path = Path("binary.json").resolve()
         repack_path = Path("repack.cdx.json").resolve()
-        produced.append(binary_path)
-        if dt_cfg:
-            _dt_upload(binary_path, dt_cfg["project_binary"], dt_cfg)
-            _dt_upload(repack_path, dt_cfg["project_repack"], dt_cfg)
+
+        if binary_path.exists():
+            produced.append(binary_path)
+            if dt_cfg:
+                _dt_upload(binary_path, dt_cfg["project_binary"], dt_cfg)
+        else:
+            print(f"[scan-full] warning: binary SBOM was not produced: {binary_path}", file=sys.stderr)
+
+        if repack_path.exists():
+            produced.append(repack_path)
+            if dt_cfg:
+                _dt_upload(repack_path, dt_cfg["project_repack"], dt_cfg)
+        else:
+            print(f"[scan-full] warning: repack SBOM was not produced: {repack_path}", file=sys.stderr)
 
     # ── Step 4: merge ─────────────────────────────────────────────────────────
     if not produced:
