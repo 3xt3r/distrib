@@ -1619,18 +1619,27 @@ def cmd_rpm(args: argparse.Namespace) -> int:
     env = os.environ.copy()
     env.setdefault("SYFT_FILE_METADATA_DIGESTS", "sha256")
 
+    # Нормализуем имена файлов перед сканированием
+    tmp_scan_dir = scan_target.parent / (scan_target.name + "._normalized_tmp")
+    actual_scan_target = normalize_rpm_filenames(scan_target, tmp_scan_dir)
+    _cleanup_tmp = actual_scan_target != scan_target
+
     try:
-        cdx = run_syft(scan_target, env)
+        cdx = run_syft(actual_scan_target, env)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
+        if _cleanup_tmp and tmp_scan_dir.exists():
+            shutil.rmtree(tmp_scan_dir, ignore_errors=True)
         return 3
 
     raw_cdx_for_save = json.dumps(cdx, ensure_ascii=False, indent=2) + "\n"
 
     try:
-        scan_stats = enrich_scan_target_components(cdx, scan_target, debug=args.debug)
+        scan_stats = enrich_scan_target_components(cdx, actual_scan_target, debug=args.debug)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
+        if _cleanup_tmp and tmp_scan_dir.exists():
+            shutil.rmtree(tmp_scan_dir, ignore_errors=True)
         return 1
 
     compare_stats = {
@@ -1709,6 +1718,10 @@ def cmd_rpm(args: argparse.Namespace) -> int:
     print(json.dumps(stats, ensure_ascii=False, indent=2))
 
     merge_whl_into_sbom(cdx, scan_target, updated_sbom_file)
+
+    if _cleanup_tmp and tmp_scan_dir.exists():
+        shutil.rmtree(tmp_scan_dir, ignore_errors=True)
+        print(f"[rpm] cleaned up temp dir: {tmp_scan_dir}")
 
     should_run_cve = bool(getattr(args, "auto_cve_rpm", False)) or getattr(args, "cve_rpm_args", None) is not None
 
